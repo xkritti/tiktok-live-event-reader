@@ -1,0 +1,29 @@
+{
+  "name": "tiktok-live-cli",
+  "version": "1.0.0",
+  "description": "CLI program for TikTok Live streaming using tiktok-live-connector",
+  "main": "index.js",
+  "bin": {
+    "tiktok-live": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js",
+    "link": "npm link",
+    "unlink": "npm unlink",
+    "install-cli": "npm link",
+    "uninstall-cli": "npm unlink"
+  },
+  "keywords": ["tiktok", "live", "cli", "streaming"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "tiktok-live-connector": "2.0.7-beta1",
+    "express": "^4.18.2",
+    "ws": "^8.14.2",
+    "cors": "^2.8.5"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

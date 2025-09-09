@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TikTok Live WebSocket Client</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            display: flex;
+            gap: 20px;
+        }
+        .panel {
+            flex: 1;
+            border: 1px solid #ddd;
+            padding: 15px;
+            border-radius: 5px;
+        }
+        .events {
+            height: 400px;
+            overflow-y: auto;
+            background: #f5f5f5;
+            padding: 10px;
+            border-radius: 3px;
+        }
+        .event {
+            margin: 5px 0;
+            padding: 5px;
+            border-radius: 3px;
+            font-size: 12px;
+        }
+        .event.gift { background: #e8f5e8; border-left: 3px solid #4caf50; }
+        .event.chat { background: #e3f2fd; border-left: 3px solid #2196f3; }
+        .event.like { background: #fff3e0; border-left: 3px solid #ff9800; }
+        .event.member { background: #f3e5f5; border-left: 3px solid #9c27b0; }
+        .controls {
+            margin-bottom: 20px;
+        }
+        input, button {
+            padding: 8px;
+            margin: 5px;
+            border: 1px solid #ddd;
+            border-radius: 3px;
+        }
+        button {
+            background: #2196f3;
+            color: white;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #1976d2;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 3px;
+            font-weight: bold;
+        }
+        .status.connected { background: #e8f5e8; color: #2e7d32; }
+        .status.disconnected { background: #ffebee; color: #c62828; }
+    </style>
+</head>
+<body>
+    <h1>TikTok Live WebSocket Client</h1>
+
+    <div class="controls">
+        <input type="text" id="username" placeholder="Enter TikTok username" value="icesyhappy">
+        <button onclick="connect()">Connect</button>
+        <button onclick="disconnect()">Disconnect</button>
+        <button onclick="disconnectAll()">Disconnect All</button>
+        <button onclick="clearEvents()">Clear Events</button>
+        <button onclick="showConnections()">Show Connections</button>
+    </div>
+
+    <div id="status" class="status disconnected">Disconnected</div>
+
+    <div class="container">
+        <div class="panel">
+            <h3>Live Events</h3>
+            <div id="events" class="events"></div>
+        </div>
+
+        <div class="panel">
+            <h3>Statistics</h3>
+            <div id="stats">
+                <p>Connected Users: <span id="connectedUsers">0</span></p>
+                <p>Total Gifts: <span id="totalGifts">0</span></p>
+                <p>Total Chats: <span id="totalChats">0</span></p>
+                <p>Total Likes: <span id="totalLikes">0</span></p>
+            </div>
+
+            <h4>Recent Gifts</h4>
+            <div id="recentGifts" class="events" style="height: 200px;"></div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let currentUsername = '';
+        let stats = {
+            gifts: 0,
+            chats: 0,
+            likes: 0,
+            members: 0
+        };
+
+        function connect() {
+            const username = document.getElementById('username').value.trim();
+            if (!username) {
+                alert('Please enter a username');
+                return;
+            }
+
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.close();
+            }
+
+            currentUsername = username;
+
+            // Connect to server WebSocket
+            ws = new WebSocket('ws://localhost:3000');
+
+            ws.onopen = function(event) {
+                console.log('Connected to server');
+                updateStatus('Connected to server', 'connected');
+
+                // Request to connect to TikTok user
+                fetch(`http://localhost:3000/connect/${username}`, {
+                    method: 'POST'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        updateStatus(`Connected to ${username} (Room: ${data.roomId})`, 'connected');
+                    } else {
+                        updateStatus('Failed to connect: ' + data.error, 'disconnected');
+                    }
+                })
+                .catch(error => {
+                    updateStatus('Connection error: ' + error.message, 'disconnected');
+                });
+            };
+
+            ws.onmessage = function(event) {
+                const message = JSON.parse(event.data);
+                handleMessage(message);
+            };
+
+            ws.onclose = function(event) {
+                console.log('Disconnected from server');
+                updateStatus('Disconnected from server', 'disconnected');
+            };
+
+            ws.onerror = function(error) {
+                console.error('WebSocket error:', error);
+                updateStatus('WebSocket error', 'disconnected');
+            };
+        }
+
+        function disconnect() {
+            if (!currentUsername) return;
+
+            fetch(`http://localhost:3000/connect/${currentUsername}`, {
+                method: 'DELETE'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    updateStatus('Disconnected', 'disconnected');
+                }
+            })
+            .catch(error => {
+                console.error('Disconnect error:', error);
+            });
+
+            if (ws) {
+                ws.close();
+            }
+        }
+
+        function handleMessage(message) {
+            console.log('Received:', message);
+
+            switch (message.type) {
+                case 'welcome':
+                    addEvent('System', 'Connected to TikTok Live Server', 'system');
+                    break;
+
+                case 'connection_created':
+                    addEvent('System', `Connected to ${message.username}`, 'system');
+                    break;
+
+                case 'connection_closed':
+                    addEvent('System', `Disconnected from ${message.username}`, 'system');
+                    break;
+
+                case 'gift':
+                    if (message.username === currentUsername) {
+                        stats.gifts++;
+                        updateStats();
+                        addEvent('gift', `${message.data.sender} sent ${message.data.giftName} x${message.data.repeatCount}`, 'gift');
+                        addRecentGift(message.data);
+                    }
+                    break;
+
+                case 'chat':
+                    if (message.username === currentUsername) {
+                        stats.chats++;
+                        updateStats();
+                        addEvent('chat', `${message.data.sender}: ${message.data.message}`, 'chat');
+                    }
+                    break;
+
+                case 'like':
+                    if (message.username === currentUsername) {
+                        stats.likes++;
+                        updateStats();
+                        addEvent('like', `${message.data.sender} sent ${message.data.likeCount} likes`, 'like');
+                    }
+                    break;
+
+                case 'member':
+                    if (message.username === currentUsername) {
+                        stats.members++;
+                        updateStats();
+                        addEvent('member', `${message.data.user} joined`, 'member');
+                    }
+                    break;
+
+                case 'error':
+                    addEvent('Error', `${message.username}: ${message.data.message}`, 'error');
+                    break;
+
+                case 'disconnected':
+                    addEvent('System', `${message.username} disconnected`, 'system');
+                    break;
+            }
+        }
+
+        function addEvent(type, content, className) {
+            const eventsDiv = document.getElementById('events');
+            const eventDiv = document.createElement('div');
+            eventDiv.className = `event ${className}`;
+            eventDiv.innerHTML = `<strong>[${new Date().toLocaleTimeString()}] ${type}:</strong> ${content}`;
+            eventsDiv.appendChild(eventDiv);
+            eventsDiv.scrollTop = eventsDiv.scrollHeight;
+        }
+
+        function addRecentGift(giftData) {
+            const giftsDiv = document.getElementById('recentGifts');
+            const giftDiv = document.createElement('div');
+            giftDiv.className = 'event gift';
+            giftDiv.innerHTML = `<strong>${giftData.sender}:</strong> ${giftData.giftName} x${giftData.repeatCount}`;
+            giftsDiv.insertBefore(giftDiv, giftsDiv.firstChild);
+
+            // Keep only last 10 gifts
+            while (giftsDiv.children.length > 10) {
+                giftsDiv.removeChild(giftsDiv.lastChild);
+            }
+        }
+
+        function updateStatus(text, className) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = text;
+            statusDiv.className = `status ${className}`;
+        }
+
+        function updateStats() {
+            document.getElementById('totalGifts').textContent = stats.gifts;
+            document.getElementById('totalChats').textContent = stats.chats;
+            document.getElementById('totalLikes').textContent = stats.likes;
+            document.getElementById('connectedUsers').textContent = currentUsername ? 1 : 0;
+        }
+
+        function clearEvents() {
+            document.getElementById('events').innerHTML = '';
+            document.getElementById('recentGifts').innerHTML = '';
+            stats = { gifts: 0, chats: 0, likes: 0, members: 0 };
+            updateStats();
+        }
+
+        // WebSocket connection management
+        function connectWebSocket() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                console.log('WebSocket already connected');
+                return;
+            }
+
+            console.log('Connecting to WebSocket...');
+            ws = new WebSocket('ws://localhost:3000');
+
+            ws.onopen = function(event) {
+                console.log('Connected to TikTok Live Server WebSocket');
+                updateStatus('Connected to WebSocket', 'connected');
+
+                // ส่ง message เพื่อ subscribe user ที่กำลังดูอยู่
+                const username = document.getElementById('username').value.trim();
+                if (username) {
+                    subscribeToUser(username);
+                }
+
+                // ส่ง welcome message request
+                ws.send(JSON.stringify({
+                    type: 'subscribe',
+                    action: 'all' // รับ events จากทุก user
+                }));
+            };
+
+            ws.onmessage = function(event) {
+                try {
+                    const message = JSON.parse(event.data);
+                    handleWebSocketMessage(message);
+                } catch (error) {
+                    console.error('Error parsing WebSocket message:', error);
+                }
+            };
+
+            ws.onclose = function(event) {
+                console.log('WebSocket disconnected');
+                updateStatus('WebSocket disconnected', 'disconnected');
+            };
+
+            ws.onerror = function(error) {
+                console.error('WebSocket error:', error);
+                updateStatus('WebSocket error', 'disconnected');
+            };
+        }
+
+        function subscribeToUser(username) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'subscribe',
+                    username: username
+                }));
+                console.log(`Subscribed to user: ${username}`);
+            }
+        }
+
+        function unsubscribeFromUser(username) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'unsubscribe',
+                    username: username
+                }));
+                console.log(`Unsubscribed from user: ${username}`);
+            }
+        }
+
+        function handleWebSocketMessage(message) {
+            console.log('WebSocket message received:', message);
+
+            switch (message.type) {
+                case 'welcome':
+                    addEvent('System', 'Connected to TikTok Live Server', 'system');
+                    break;
+
+                case 'connection_created':
+                    addEvent('System', `Server connected to ${message.username}`, 'system');
+                    break;
+
+                case 'connection_closed':
+                    addEvent('System', `Server disconnected from ${message.username}`, 'system');
+                    break;
+
+                case 'gift':
+                    if (message.username === currentUsername) {
+                        stats.gifts++;
+                        updateStats();
+                        addEvent('gift', `${message.data.sender} sent ${message.data.giftName} x${message.data.repeatCount}`, 'gift');
+                        addRecentGift(message.data);
+                    }
+                    break;
+
+                case 'chat':
+                    if (message.username === currentUsername) {
+                        stats.chats++;
+                        updateStats();
+                        addEvent('chat', `${message.data.sender}: ${message.data.message}`, 'chat');
+                    }
+                    break;
+
+                case 'like':
+                    if (message.username === currentUsername) {
+                        stats.likes++;
+                        updateStats();
+                        addEvent('like', `${message.data.sender} sent ${message.data.likeCount} likes`, 'like');
+                    }
+                    break;
+
+                case 'member':
+                    if (message.username === currentUsername) {
+                        stats.members++;
+                        updateStats();
+                        addEvent('member', `${message.data.user} joined`, 'member');
+                    }
+                    break;
+
+                case 'error':
+                    addEvent('Error', `${message.username}: ${message.data.message}`, 'error');
+                    break;
+
+                case 'disconnected':
+                    addEvent('System', `${message.username} disconnected`, 'system');
+                    break;
+
+                default:
+                    console.log('Unknown message type:', message.type);
+            }
+        }
+
+        // Modified connect function to include WebSocket connection
+        function connect() {
+            const username = document.getElementById('username').value.trim();
+            if (!username) {
+                alert('Please enter a username');
+                return;
+            }
+
+            currentUsername = username;
+
+            // Connect to WebSocket first
+            connectWebSocket();
+
+            // Then connect to TikTok user via HTTP API
+            fetch(`http://localhost:3000/connect/${username}`, {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    updateStatus(`Connected to ${username} (Room: ${data.roomId})`, 'connected');
+                    // Subscribe to this user on WebSocket
+                    subscribeToUser(username);
+                } else {
+                    updateStatus('Failed to connect: ' + data.error, 'disconnected');
+                }
+            })
+            .catch(error => {
+                updateStatus('Connection error: ' + error.message, 'disconnected');
+            });
+        }
+
+        // Disconnect current user
+        function disconnect() {
+            if (!currentUsername) return;
+
+            // Unsubscribe from WebSocket
+            unsubscribeFromUser(currentUsername);
+
+            // Disconnect from HTTP API
+            fetch(`http://localhost:3000/connect/${currentUsername}`, {
+                method: 'DELETE'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    updateStatus('Disconnected', 'disconnected');
+                    addEvent('System', `Disconnected from ${currentUsername}`, 'system');
+                } else {
+                    addEvent('Error', `Failed to disconnect: ${data.error}`, 'error');
+                }
+            })
+            .catch(error => {
+                console.error('Disconnect error:', error);
+                addEvent('Error', `Disconnect error: ${error.message}`, 'error');
+            });
+
+            // Don't close WebSocket, just disconnect from user
+            // ws.close(); // Remove this line
+        }
+
+        // Disconnect all users
+        function disconnectAll() {
+            fetch('http://localhost:3000/status', {
+                method: 'GET'
+            })
+            .then(response => response.json())
+            .then(data => {
+                const usernames = Object.keys(data.connections || {});
+
+                if (usernames.length === 0) {
+                    addEvent('System', 'No active connections to disconnect', 'system');
+                    return;
+                }
+
+                // Disconnect each user
+                const disconnectPromises = usernames.map(username =>
+                    fetch(`http://localhost:3000/connect/${username}`, {
+                        method: 'DELETE'
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            addEvent('System', `Disconnected from ${username}`, 'system');
+                        } else {
+                            addEvent('Error', `Failed to disconnect ${username}: ${data.error}`, 'error');
+                        }
+                    })
+                    .catch(error => {
+                        addEvent('Error', `Disconnect error for ${username}: ${error.message}`, 'error');
+                    })
+                );
+
+                // Update status after all disconnects
+                Promise.all(disconnectPromises).then(() => {
+                    updateStatus('All connections disconnected', 'disconnected');
+                });
+            })
+            .catch(error => {
+                console.error('Error getting status:', error);
+                addEvent('Error', `Failed to get status: ${error.message}`, 'error');
+            });
+        }
+
+        // Show all active connections
+        function showConnections() {
+            fetch('http://localhost:3000/status', {
+                method: 'GET'
+            })
+            .then(response => response.json())
+            .then(data => {
+                const connections = data.connections || {};
+                const usernames = Object.keys(connections);
+
+                if (usernames.length === 0) {
+                    addEvent('System', 'No active connections', 'system');
+                    return;
+                }
+
+                addEvent('System', `Active connections: ${usernames.join(', ')}`, 'system');
+
+                // Show details for each connection
+                usernames.forEach(username => {
+                    const conn = connections[username];
+                    addEvent('Info', `${username}: Room ${conn.roomId}, ${conn.processedMessages} processed messages`, 'system');
+                });
+            })
+            .catch(error => {
+                console.error('Error getting status:', error);
+                addEvent('Error', `Failed to get status: ${error.message}`, 'error');
+            });
+        }
+
+        // Auto-connect on page load
+        window.addEventListener('load', function() {
+            // Connect to WebSocket immediately
+            connectWebSocket();
+
+            // Optional: auto-connect if username is provided in URL
+            const urlParams = new URLSearchParams(window.location.search);
+            const username = urlParams.get('username');
+            if (username) {
+                document.getElementById('username').value = username;
+                // Uncomment to auto-connect
+                // setTimeout(() => connect(), 1000);
+            }
+        });
+    </script>
+</body>
+</html>
